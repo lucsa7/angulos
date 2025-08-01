@@ -2,7 +2,8 @@
 nixPkgs = ["python39", "libGL", "ffmpeg", "gcc"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python -m venv venv", ". venv/bin/activate", "pip install --upgrade pip", "pip install -r requirements.txt"]
 
 [start]
-cmd = "gunicorn app:server"
+cmd = ". venv/bin/activate && gunicorn app:server"
+
