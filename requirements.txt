@@ -1,0 +1,15 @@
+dash==3.1.1
+dash-bootstrap-components==1.5.0
+flask==3.0.3
+opencv-python==4.11.0.86
+mediapipe==0.10.9
+numpy==1.26.4
+pandas==2.3.1
+plotly==5.15.0
+Pillow==10.4.0
+python-docx==1.1.2
+xlsxwriter==3.2.2
+apscheduler==3.11.0
+gunicorn==23.0.0
+
+
