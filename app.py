@@ -553,3 +553,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     print(f"✅ App levantando en http://0.0.0.0:{port}/")
     app.run(host="0.0.0.0", port=port, debug=False)
+
+# ⬅️ Agregá esto al final
+server = app.server
