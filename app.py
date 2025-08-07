@@ -33,10 +33,13 @@ CLR_LINE, CLR_PT = (0, 230, 127), (250, 250, 250)
 # Estilos globales
 IMG_STYLE = {
     "width": "100%",
+    "maxWidth": "100%",
     "height": "auto",
     "borderRadius": "0.75rem",
-    "boxShadow": "0 2px 8px rgba(0,0,0,.15)"
+    "boxShadow": "0 2px 8px rgba(0,0,0,.15)",
+    "objectFit": "contain"
 }
+
 CARD_BOX_STYLE = {
     "display": "flex",
     "flexWrap": "wrap",
@@ -57,7 +60,7 @@ def b64_to_cv2(content, max_size=720):
         img = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
     return img
 
-def cv2_to_b64(img, max_w=1080):
+def cv2_to_b64(img, max_w=900):
     h, w = img.shape[:2]
     if w > max_w:
         scale = max_w / w
@@ -287,12 +290,17 @@ app.layout = dbc.Container([
 # 7) Callback principal
 # ────────────────────────────────
 @app.callback(
-    Output("out-sag","children"), Output("out-front","children"),
-    Input("up-sag","contents"), Input("up-front","contents"),
-    Input("btn-reset","n_clicks"), prevent_initial_call=True)
+    Output("out-sag", "children"),
+    Output("out-front", "children"),
+    Input("up-sag", "contents"),
+    Input("up-front", "contents"),
+    Input("btn-reset", "n_clicks"),
+    prevent_initial_call=True
+)
 def handle_all(sag_c, front_c, reset):
     if ctx.triggered_id == "btn-reset":
         return "", ""
+
     # -------- Sagital --------
     if ctx.triggered_id == "up-sag" and sag_c:
         img = b64_to_cv2(sag_c)
@@ -300,19 +308,18 @@ def handle_all(sag_c, front_c, reset):
         if crop is None:
             return dbc.Alert("⚠️ No se detectó pose sagital", color="warning"), no_update
         crop_b64, vis_b64 = cv2_to_b64(crop), cv2_to_b64(vis)
-        cards = [card(k,v) for k,v in data.items()]
+        cards = [card(k, v) for k, v in data.items()]
         out_sag = html.Div([
             dbc.Row([
-                dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                                 style=IMG_STYLE), xs=12, md=6),
+                dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}", style=IMG_STYLE), xs=12, md=6),
                 dbc.Col(html.Div(cards, style=CARD_BOX_STYLE), xs=12, md=6)
-            ], className="align-items-start"),
+            ]),
             html.Hr(className="border-secondary"),
-            dbc.Row(dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                                     style=IMG_STYLE),
-                            width={"size":10,"offset":1}))
+            html.Div(html.Img(src=f"data:image/jpg;base64,{vis_b64}", style=IMG_STYLE),
+                     className="text-center")
         ])
         return out_sag, no_update
+
     # -------- Frontal --------
     if ctx.triggered_id == "up-front" and front_c:
         img = b64_to_cv2(front_c)
@@ -320,20 +327,20 @@ def handle_all(sag_c, front_c, reset):
         if crop is None:
             return no_update, dbc.Alert("⚠️ No se detectó pose frontal", color="warning")
         crop_b64, vis_b64 = cv2_to_b64(crop), cv2_to_b64(vis)
-        cards = [card(k,v) for k,v in data.items()]
+        cards = [card(k, v) for k, v in data.items()]
         out_front = html.Div([
             dbc.Row([
-                dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                                 style=IMG_STYLE), xs=12, md=6),
+                dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}", style=IMG_STYLE), xs=12, md=6),
                 dbc.Col(html.Div(cards, style=CARD_BOX_STYLE), xs=12, md=6)
-            ], className="align-items-start"),
+            ]),
             html.Hr(className="border-secondary"),
-            dbc.Row(dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                                     style=IMG_STYLE),
-                            width={"size":10,"offset":1}))
+            html.Div(html.Img(src=f"data:image/jpg;base64,{vis_b64}", style=IMG_STYLE),
+                     className="text-center")
         ])
         return no_update, out_front
+
     raise dash.exceptions.PreventUpdate
+
 
 # ────────────────────────────────
 # 8) keep-alive + arranque
