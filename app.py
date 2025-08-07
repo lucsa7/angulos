@@ -34,11 +34,13 @@ CLR_LINE, CLR_PT = (0, 230, 127), (250, 250, 250)
 IMG_STYLE = {
     "width": "100%",
     "maxWidth": "100%",
+    "maxHeight": "600px",   # ← límite para monitores grandes
     "height": "auto",
     "borderRadius": "0.75rem",
     "boxShadow": "0 2px 8px rgba(0,0,0,.15)",
     "objectFit": "contain"
 }
+
 
 CARD_BOX_STYLE = {
     "display": "flex",
@@ -115,68 +117,74 @@ def card(var: str, val):
     ])
 
 # ────────────────────────────────
-# 4) Análisis SAGITAL  ·  COMPLETO
+# 4) Análisis SAGITAL  · sin tobillo
 # ────────────────────────────────
 def analyze_sagital(img):
-    # (sin cambios funcionales)
     pose, seg = get_pose(True), get_seg()
+
+    # 1 · detección global
     res1 = pose.process(img)
     if not res1.pose_landmarks:
         return None, None, {}
-    crop = crop_person(img, res1.pose_landmarks.landmark)
-    h, w = crop.shape[:2]
-    res2 = pose.process(crop)
-    if not res2.pose_landmarks:
-        return None, None, {}
-    lm2 = res2.pose_landmarks.landmark
-    side = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
-    pick = lambda L, R: R if side == "R" else L
-    ids  = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-            for n in ("SHOULDER", "HIP", "KNEE", "ANKLE",
-                      "HEEL", "FOOT_INDEX", "WRIST")]
-    SHp, HIp, KNp, ANp, HEp, FTp, WRp = [
-        (int(lm2[i].x * w), int(lm2[i].y * h)) for i in ids
-    ]
-    def ang(u, v):
+
+    # 2 · recorte y 2.ª detección (mejor precisión)
+    crop  = crop_person(img, res1.pose_landmarks.landmark)
+    res2  = pose.process(crop)
+    lm, (h, w) = (res2.pose_landmarks.landmark, crop.shape[:2]) \
+                 if res2.pose_landmarks else (res1.pose_landmarks.landmark, img.shape[:2])
+    frame = crop if res2.pose_landmarks else img
+
+    # 3 · puntos (lado más visible)
+    side = "R" if lm[P.RIGHT_HIP].visibility >= lm[P.LEFT_HIP].visibility else "L"
+    pick = lambda L,R: R if side == "R" else L
+    ids  = [pick(getattr(P,f"LEFT_{n}"), getattr(P,f"RIGHT_{n}"))
+            for n in ("SHOULDER","HIP","KNEE","ANKLE","FOOT_INDEX","WRIST")]
+    SHp,HIp,KNp,ANp,FTp,WRp = [(int(lm[i].x*w), int(lm[i].y*h)) for i in ids]
+
+    # 4 · ángulos
+    def ang(u,v):
+        u,v = np.array(u), np.array(v)
         return np.degrees(np.arccos(
-            np.clip(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9), -1, 1)))
-    hip_flex  = ang(np.array(SHp) - HIp, np.array(KNp) - HIp)
-    knee_flex = ang(np.array(HIp) - KNp, np.array(ANp) - KNp)
-    shd_flex  = ang(np.array(HIp) - SHp, np.array(WRp) - SHp)
+            np.clip(np.dot(u,v)/(np.linalg.norm(u)*np.linalg.norm(v)+1e-9),-1,1)))
+
+    hip_flex  = ang(np.subtract(SHp,HIp), np.subtract(KNp,HIp))
+    knee_flex = ang(np.subtract(HIp,KNp), np.subtract(ANp,KNp))
+    shd_flex  = ang(np.subtract(HIp,SHp), np.subtract(WRp,SHp))
     trunk_tib = abs(hip_flex - knee_flex)
-    raw_heel  = ang(np.array(KNp) - ANp, np.array(HEp) - ANp) - 90
-    raw_toe   = ang(np.array(KNp) - ANp, np.array(FTp) - ANp) - 90
-    ankle_df  = (abs(raw_heel) + abs(raw_toe)) / 2
+
     data = {
         "Hip flex":      hip_flex,
         "Knee flex":     knee_flex,
         "Shoulder flex": shd_flex,
-        "|Trunk-Tibia|": trunk_tib,
-        "Ankle DF":      ankle_df
+        "|Trunk-Tibia|": trunk_tib
     }
-    mask = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)).segmentation_mask > 0.6
-    blur = cv2.GaussianBlur(crop, (17, 17), 0)
-    vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
-    for name, (A, B, C) in [
+
+    # 5 · visualización (sin valor de tobillo)
+    mask = seg.process(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)).segmentation_mask > 0.6
+    vis  = np.where(mask[...,None], frame,
+                    cv2.GaussianBlur(frame, (17,17), 0)).astype(np.uint8)
+
+    for name,(A,B,C) in [
         ("Hip flex",      (SHp, HIp, KNp)),
         ("Knee flex",     (HIp, KNp, ANp)),
         ("Shoulder flex", (HIp, SHp, WRp))
     ]:
-        cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
-        cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
-        for pt in (A, B, C): cv2.circle(vis, pt, 6, CLR_PT, -1)
+        cv2.arrowedLine(vis, B, A, (255,0,0), 3, tipLength=.1)
+        cv2.arrowedLine(vis, B, C, (255,0,0), 3, tipLength=.1)
+        for pt in (A,B,C): cv2.circle(vis, pt, 6, CLR_PT, -1)
         txt = f"{data[name]:.1f}"
-        for c in [(255,255,255,3),(0,0,0,2)]:
-            cv2.putText(vis, txt, (B[0]+12,B[1]-12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, c[:3], c[3], cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, .6, (255,255,255), 3, cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, .6, (0,0,0), 2, cv2.LINE_AA)
+
+    # líneas de referencia (opcionales)
     cv2.line(vis, KNp, ANp, CLR_LINE, 4)
-    cv2.line(vis, HEp, FTp, CLR_LINE, 4)
-    for pt in (KNp, ANp, HEp, FTp): cv2.circle(vis, pt, 6, CLR_PT, -1)
-    txt = f"{ankle_df:.1f}"
-    for c in [(255,255,255,3),(0,0,0,2)]:
-        cv2.putText(vis, txt, (ANp[0]+12,ANp[1]-12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, c[:3], c[3], cv2.LINE_AA)
-    return crop, vis, data
+    cv2.line(vis, ANp, FTp, CLR_LINE, 4)
+    for pt in (KNp, ANp, FTp): cv2.circle(vis, pt, 6, CLR_PT, -1)
+
+    return frame, vis, data
+
 
 # ────────────────────────────────
 # 5) Análisis FRONTAL (solo valores)
@@ -237,7 +245,6 @@ METRIC_LIST = html.Ul([
     html.Li("Hip flex (°): ángulo hombro-cadera-rodilla."),
     html.Li("Knee flex (°): ángulo cadera-rodilla-tobillo."),
     html.Li("|Trunk-Tibia| (°): diferencia entre ángulo de tronco y tibia."),
-    html.Li("Ankle DF (°): dorsiflexión media de tobillo."),
     html.Li(html.B("Métricas FRONTALES:"), className="mt-2 mb-1"),
     html.Li("Δ Caderas (px): diferencia de altura entre caderas."),
     html.Li("Δ Muñecas (px): diferencia de altura entre muñecas."),
