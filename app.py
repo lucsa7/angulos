@@ -117,71 +117,81 @@ def card(var: str, val):
     ])
 
 # ────────────────────────────────
-# 4) Análisis SAGITAL  · sin tobillo
+# 4) Análisis SAGITAL · sin línea/marker de pie
 # ────────────────────────────────
 def analyze_sagital(img):
     pose, seg = get_pose(True), get_seg()
 
-    # 1 · detección global
+    # 1) detección global
     res1 = pose.process(img)
     if not res1.pose_landmarks:
         return None, None, {}
 
-    # 2 · recorte y 2.ª detección (mejor precisión)
+    # 2) recorte y 2ª detección (mejor precisión)
     crop  = crop_person(img, res1.pose_landmarks.landmark)
     res2  = pose.process(crop)
     lm, (h, w) = (res2.pose_landmarks.landmark, crop.shape[:2]) \
                  if res2.pose_landmarks else (res1.pose_landmarks.landmark, img.shape[:2])
     frame = crop if res2.pose_landmarks else img
 
-    # 3 · puntos (lado más visible)
+    # 3) puntos (lado más visible) — usamos tobillo, NO pie
     side = "R" if lm[P.RIGHT_HIP].visibility >= lm[P.LEFT_HIP].visibility else "L"
-    pick = lambda L,R: R if side == "R" else L
+    pick = lambda L, R: R if side == "R" else L
     ids  = [pick(getattr(P,f"LEFT_{n}"), getattr(P,f"RIGHT_{n}"))
-            for n in ("SHOULDER","HIP","KNEE","ANKLE","FOOT_INDEX","WRIST")]
-    SHp,HIp,KNp,ANp,FTp,WRp = [(int(lm[i].x*w), int(lm[i].y*h)) for i in ids]
+            for n in ("SHOULDER","HIP","KNEE","ANKLE")]  # ← sin FOOT_INDEX
+    SHp, HIp, KNp, ANp = [(int(lm[i].x*w), int(lm[i].y*h)) for i in ids]
 
-    # 4 · ángulos
-    def ang(u,v):
-        u,v = np.array(u), np.array(v)
-        return np.degrees(np.arccos(
-            np.clip(np.dot(u,v)/(np.linalg.norm(u)*np.linalg.norm(v)+1e-9),-1,1)))
+    # 4) ángulos
+    def angle_at(A, B, C):
+        # ángulo en B formado por BA y BC
+        BA = np.array([A[0]-B[0], A[1]-B[1]], dtype=float)
+        BC = np.array([C[0]-B[0], C[1]-B[1]], dtype=float)
+        cosang = np.dot(BA, BC) / (np.linalg.norm(BA)*np.linalg.norm(BC) + 1e-9)
+        return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
-    hip_flex  = ang(np.subtract(SHp,HIp), np.subtract(KNp,HIp))
-    knee_flex = ang(np.subtract(HIp,KNp), np.subtract(ANp,KNp))
-    shd_flex  = ang(np.subtract(HIp,SHp), np.subtract(WRp,SHp))
-    trunk_tib = abs(hip_flex - knee_flex)
+    def angle_between(U, V):
+        U, V = np.array(U, float), np.array(V, float)
+        cosang = np.dot(U, V) / (np.linalg.norm(U)*np.linalg.norm(V) + 1e-9)
+        return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
+
+    hip_flex   = angle_at(SHp, HIp, KNp)             # hombro–cadera–rodilla
+    knee_flex  = angle_at(HIp, KNp, ANp)             # cadera–rodilla–tobillo
+    shd_flex   = angle_at(HIp, SHp, (SHp[0], SHp[1]-50))  # brazo vs tronco (aprox. vertical local)
+    trunk_vec  = (SHp[0]-HIp[0], SHp[1]-HIp[1])      # tronco = hip→shoulder
+    tibia_vec  = (ANp[0]-KNp[0], ANp[1]-KNp[1])      # tibia = knee→ankle
+    trunk_tib  = angle_between(trunk_vec, tibia_vec) # relación tronco–tibia
 
     data = {
-        "Hip flex":      hip_flex,
-        "Knee flex":     knee_flex,
-        "Shoulder flex": shd_flex,
-        "|Trunk-Tibia|": trunk_tib
+        "Hip flex":       hip_flex,
+        "Knee flex":      knee_flex,
+        "Shoulder flex":  shd_flex,
+        "Trunk–Tibia (°)": trunk_tib
     }
 
-    # 5 · visualización (sin valor de tobillo)
+    # 5) visualización (sin línea/marker de pie)
     mask = seg.process(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)).segmentation_mask > 0.6
-    vis  = np.where(mask[...,None], frame,
-                    cv2.GaussianBlur(frame, (17,17), 0)).astype(np.uint8)
+    vis  = np.where(mask[..., None], frame, cv2.GaussianBlur(frame, (17,17), 0)).astype(np.uint8)
 
-    for name,(A,B,C) in [
+    # dibujar ángulos: cadera, rodilla y hombro
+    for name, (A, B, C) in [
         ("Hip flex",      (SHp, HIp, KNp)),
         ("Knee flex",     (HIp, KNp, ANp)),
-        ("Shoulder flex", (HIp, SHp, WRp))
+        ("Shoulder flex", (HIp, SHp, (SHp[0], SHp[1]-50))),
     ]:
         cv2.arrowedLine(vis, B, A, (255,0,0), 3, tipLength=.1)
         cv2.arrowedLine(vis, B, C, (255,0,0), 3, tipLength=.1)
-        for pt in (A,B,C): cv2.circle(vis, pt, 6, CLR_PT, -1)
+        for pt in (A, B, C):
+            cv2.circle(vis, pt, 6, CLR_PT, -1)
         txt = f"{data[name]:.1f}"
         cv2.putText(vis, txt, (B[0]+12, B[1]-12),
                     cv2.FONT_HERSHEY_SIMPLEX, .6, (255,255,255), 3, cv2.LINE_AA)
         cv2.putText(vis, txt, (B[0]+12, B[1]-12),
                     cv2.FONT_HERSHEY_SIMPLEX, .6, (0,0,0), 2, cv2.LINE_AA)
 
-    # líneas de referencia (opcionales)
-    cv2.line(vis, KNp, ANp, CLR_LINE, 4)
-    cv2.line(vis, ANp, FTp, CLR_LINE, 4)
-    for pt in (KNp, ANp, FTp): cv2.circle(vis, pt, 6, CLR_PT, -1)
+    # referencias opcionales: solo rodilla↔tobillo (tibia). NO dibujar ankle→foot ni el pie.
+    cv2.line(vis, KNp, ANp, CLR_LINE, 4)  # tibia
+    # (eliminado) cv2.line(vis, ANp, FTp, CLR_LINE, 4)
+    # (eliminado) circle/marker del pie
 
     return frame, vis, data
 
