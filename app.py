@@ -130,20 +130,27 @@ def analyze_sagital(img):
     # 2) recorte y 2ª detección (mejor precisión)
     crop  = crop_person(img, res1.pose_landmarks.landmark)
     res2  = pose.process(crop)
-    lm, (h, w) = (res2.pose_landmarks.landmark, crop.shape[:2]) \
-                 if res2.pose_landmarks else (res1.pose_landmarks.landmark, img.shape[:2])
-    frame = crop if res2.pose_landmarks else img
+    if res2.pose_landmarks:
+        lm = res2.pose_landmarks.landmark
+        frame = crop
+        h, w = crop.shape[:2]
+    else:
+        lm = res1.pose_landmarks.landmark
+        frame = img
+        h, w = img.shape[:2]
 
-    # 3) puntos (lado más visible) — usamos tobillo, NO pie
+    # 3) puntos (lado más visible) — usamos tobillo para rodilla/tibia, NO pie
     side = "R" if lm[P.RIGHT_HIP].visibility >= lm[P.LEFT_HIP].visibility else "L"
     pick = lambda L, R: R if side == "R" else L
-    ids  = [pick(getattr(P,f"LEFT_{n}"), getattr(P,f"RIGHT_{n}"))
-            for n in ("SHOULDER","HIP","KNEE","ANKLE")]  # ← sin FOOT_INDEX
-    SHp, HIp, KNp, ANp = [(int(lm[i].x*w), int(lm[i].y*h)) for i in ids]
+    idxs = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
+            for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "WRIST")]  # ← sin FOOT_INDEX
+    SHi, HIi, KNi, ANi, WRi = idxs
+
+    def px(i): return (int(lm[i].x * w), int(lm[i].y * h))
+    SHp, HIp, KNp, ANp, WRp = map(px, (SHi, HIi, KNi, ANi, WRi))
 
     # 4) ángulos
     def angle_at(A, B, C):
-        # ángulo en B formado por BA y BC
         BA = np.array([A[0]-B[0], A[1]-B[1]], dtype=float)
         BC = np.array([C[0]-B[0], C[1]-B[1]], dtype=float)
         cosang = np.dot(BA, BC) / (np.linalg.norm(BA)*np.linalg.norm(BC) + 1e-9)
@@ -154,29 +161,29 @@ def analyze_sagital(img):
         cosang = np.dot(U, V) / (np.linalg.norm(U)*np.linalg.norm(V) + 1e-9)
         return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
-    hip_flex   = angle_at(SHp, HIp, KNp)             # hombro–cadera–rodilla
-    knee_flex  = angle_at(HIp, KNp, ANp)             # cadera–rodilla–tobillo
-    shd_flex   = angle_at(HIp, SHp, (SHp[0], SHp[1]-50))  # brazo vs tronco (aprox. vertical local)
-    trunk_vec  = (SHp[0]-HIp[0], SHp[1]-HIp[1])      # tronco = hip→shoulder
-    tibia_vec  = (ANp[0]-KNp[0], ANp[1]-KNp[1])      # tibia = knee→ankle
-    trunk_tib  = angle_between(trunk_vec, tibia_vec) # relación tronco–tibia
+    hip_flex   = angle_at(SHp, HIp, KNp)        # hombro–cadera–rodilla
+    knee_flex  = angle_at(HIp, KNp, ANp)        # cadera–rodilla–tobillo
+    shd_flex   = angle_at(HIp, SHp, WRp)        # cadera–hombro–muñeca (usa muñeca)
+    trunk_vec  = (SHp[0]-HIp[0], SHp[1]-HIp[1]) # tronco = hip→shoulder
+    tibia_vec  = (ANp[0]-KNp[0], ANp[1]-KNp[1]) # tibia  = knee→ankle
+    trunk_tib  = angle_between(trunk_vec, tibia_vec)
 
     data = {
-        "Hip flex":       hip_flex,
-        "Knee flex":      knee_flex,
-        "Shoulder flex":  shd_flex,
+        "Hip flex":        hip_flex,
+        "Knee flex":       knee_flex,
+        "Shoulder flex":   shd_flex,
         "Trunk–Tibia (°)": trunk_tib
     }
 
     # 5) visualización (sin línea/marker de pie)
     mask = seg.process(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)).segmentation_mask > 0.6
-    vis  = np.where(mask[..., None], frame, cv2.GaussianBlur(frame, (17,17), 0)).astype(np.uint8)
+    vis  = np.where(mask[..., None], frame, cv2.GaussianBlur(frame, (17, 17), 0)).astype(np.uint8)
 
-    # dibujar ángulos: cadera, rodilla y hombro
+    # ángulos dibujados
     for name, (A, B, C) in [
         ("Hip flex",      (SHp, HIp, KNp)),
         ("Knee flex",     (HIp, KNp, ANp)),
-        ("Shoulder flex", (HIp, SHp, (SHp[0], SHp[1]-50))),
+        ("Shoulder flex", (HIp, SHp, WRp)),
     ]:
         cv2.arrowedLine(vis, B, A, (255,0,0), 3, tipLength=.1)
         cv2.arrowedLine(vis, B, C, (255,0,0), 3, tipLength=.1)
@@ -188,12 +195,11 @@ def analyze_sagital(img):
         cv2.putText(vis, txt, (B[0]+12, B[1]-12),
                     cv2.FONT_HERSHEY_SIMPLEX, .6, (0,0,0), 2, cv2.LINE_AA)
 
-    # referencias opcionales: solo rodilla↔tobillo (tibia). NO dibujar ankle→foot ni el pie.
-    cv2.line(vis, KNp, ANp, CLR_LINE, 4)  # tibia
-    # (eliminado) cv2.line(vis, ANp, FTp, CLR_LINE, 4)
-    # (eliminado) circle/marker del pie
+    # referencia opcional: SOLO tibia (rodilla↔tobillo). Nada de pie.
+    cv2.line(vis, KNp, ANp, CLR_LINE, 4)
 
     return frame, vis, data
+
 
 
 # ────────────────────────────────
